@@ -1,18 +1,17 @@
 name: plants
-description: Crop Guard - Plant Disease Detection App
+description: "Crop Guard - Smart Farming Assistant"
 publish_to: 'none'
-
 version: 1.0.0+1
 
 environment:
-  sdk: '^3.13.0'
+  sdk: '^3.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
   http: ^1.1.0
-  image_picker: ^1.0.4
-  geolocator: ^10.1.0
+  image_picker: ^0.8.9
+  cupertino_icons: ^1.0.2
 
 dev_dependencies:
   flutter_test:

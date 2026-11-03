@@ -1,269 +1,187 @@
-import 'dart:io';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
+import 'main.dart';
 
 class ScanScreen extends StatefulWidget {
-  const ScanScreen({super.key});
+  final String userId;
+  const ScanScreen({super.key, required this.userId});
 
   @override
   State<ScanScreen> createState() => _ScanScreenState();
 }
 
 class _ScanScreenState extends State<ScanScreen> {
-  dynamic _selectedImage;
-  bool _isLoading = false;
-  Map<String, dynamic>? _result;
   final ImagePicker _picker = ImagePicker();
+  Uint8List? _imageBytes;
+  String _fileName = 'leaf.jpg';
+  Map<String, dynamic>? _result;
+  bool _isLoading = false;
+  String? _error;
 
-  Future<void> _pickImage(ImageSource source) async {
-    final XFile? image = await _picker.pickImage(source: source);
-    if (image != null) {
-      setState(() {
-        _selectedImage = image;
-        _result = null;
-      });
-    }
-  }
-
-  Future<void> _predict() async {
-    if (_selectedImage == null) return;
-    setState(() => _isLoading = true);
-
+  Future<void> _pick(ImageSource source) async {
     try {
-      var request = http.MultipartRequest(
-        'POST',
-        Uri.parse('http://localhost:8000/predict'),
-      );
-
-      final bytes = await _selectedImage.readAsBytes();
-      request.files.add(
-        http.MultipartFile.fromBytes(
-          'file',
-          bytes,
-          filename: 'image.jpg',
-        ),
-      );
-
-      var response = await request.send();
-      var responseData = await response.stream.bytesToString();
-      final result = jsonDecode(responseData);
-
+      final file = await _picker.pickImage(source: source, imageQuality: 85);
+      if (file == null) return;
+      final bytes = await file.readAsBytes();
       setState(() {
-        _result = result;
-        _isLoading = false;
+        _imageBytes = bytes;
+        _fileName = file.name.isEmpty ? 'leaf.jpg' : file.name;
+        _result = null;
+        _error = null;
       });
     } catch (e) {
-      setState(() {
-        _result = {"error": e.toString()};
-        _isLoading = false;
-      });
+      setState(() => _error = 'Could not open image: $e');
     }
   }
 
-  Color _getSeverityColor(String severity) {
-    switch (severity) {
-      case 'High': return Colors.red;
-      case 'Medium': return Colors.orange;
-      case 'None': return Colors.green;
-      default: return Colors.grey;
+  Future<void> _analyze() async {
+    if (_imageBytes == null) return;
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final req = http.MultipartRequest('POST', Uri.parse('$API_URL/predict'))
+        ..fields['user_id'] = widget.userId
+        ..files.add(http.MultipartFile.fromBytes('file', _imageBytes!,
+            filename: _fileName));
+      final streamed = await req.send().timeout(const Duration(seconds: 30));
+      final res = await http.Response.fromStream(streamed);
+      if (res.statusCode == 200) {
+        setState(() => _result = jsonDecode(res.body) as Map<String, dynamic>);
+      } else {
+        setState(() => _error = 'Server error ${res.statusCode}: ${res.body}');
+      }
+    } catch (e) {
+      setState(() => _error = 'Connection error: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  Widget _row(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+              width: 100,
+              child: Text(label,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold, color: Colors.black54))),
+          Expanded(child: Text(value)),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
-        title: Text('Scan Crop 🌿'),
-        backgroundColor: Color(0xFF2E7D32),
+        title: const Text('Scan Crop'),
+        backgroundColor: kGreen,
         foregroundColor: Colors.white,
       ),
       body: SingleChildScrollView(
-        padding: EdgeInsets.all(20),
+        padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            // IMAGE PREVIEW
-            GestureDetector(
-              onTap: () => _pickImage(ImageSource.gallery),
-              child: Container(
-                width: double.infinity,
-                height: 250,
-                decoration: BoxDecoration(
-                  border: Border.all(color: Color(0xFF2E7D32), width: 2),
-                  borderRadius: BorderRadius.circular(15),
-                  color: Colors.green.withOpacity(0.05),
-                ),
-                child: _selectedImage != null
-                    ? ClipRRect(
-                        borderRadius: BorderRadius.circular(15),
-                        child: Image.network(
-                          _selectedImage.path,
-                          fit: BoxFit.cover,
-                          errorBuilder: (c, e, s) => Icon(
-                            Icons.image,
-                            size: 60,
-                            color: Color(0xFF2E7D32),
-                          ),
-                        ),
-                      )
-                    : Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.add_photo_alternate,
-                              size: 60, color: Color(0xFF2E7D32)),
-                          SizedBox(height: 10),
-                          Text('Tap to select image',
-                              style: TextStyle(color: Colors.grey)),
-                        ],
-                      ),
+            Container(
+              height: 250,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: kGreen),
               ),
+              child: _imageBytes == null
+                  ? const Center(
+                      child: Text('Select a leaf photo',
+                          style: TextStyle(color: Colors.grey)))
+                  : ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.memory(_imageBytes!, fit: BoxFit.cover),
+                    ),
             ),
-            SizedBox(height: 20),
-
-            // BUTTONS
+            const SizedBox(height: 15),
             Row(
               children: [
                 Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () => _pickImage(ImageSource.gallery),
-                    icon: Icon(Icons.photo_library),
-                    label: Text('Gallery'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Color(0xFF2E7D32),
-                      foregroundColor: Colors.white,
-                      padding: EdgeInsets.symmetric(vertical: 12),
-                    ),
+                  child: OutlinedButton.icon(
+                    onPressed: () => _pick(ImageSource.gallery),
+                    icon: const Icon(Icons.photo_library),
+                    label: const Text('Gallery'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _pick(ImageSource.camera),
+                    icon: const Icon(Icons.camera_alt),
+                    label: const Text('Camera'),
                   ),
                 ),
               ],
             ),
-            SizedBox(height: 15),
-
-            // DETECT BUTTON
-            if (_selectedImage != null)
-              SizedBox(
-                width: double.infinity,
-                height: 50,
-                child: ElevatedButton(
-                  onPressed: _isLoading ? null : _predict,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                  child: _isLoading
-                      ? CircularProgressIndicator(color: Colors.white)
-                      : Text('🔍 Detect Disease',
-                          style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold)),
+            const SizedBox(height: 15),
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton(
+                onPressed:
+                    (_imageBytes == null || _isLoading) ? null : _analyze,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: kGreen,
+                  foregroundColor: Colors.white,
                 ),
+                child: _isLoading
+                    ? const CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2)
+                    : const Text('ANALYZE',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.bold)),
               ),
-
-            SizedBox(height: 20),
-
-            // RESULT CARD
-            if (_result != null && !_result!.containsKey('error'))
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 15),
+              Text(_error!, style: const TextStyle(color: Colors.red)),
+            ],
+            if (_result != null) ...[
+              const SizedBox(height: 20),
               Container(
                 width: double.infinity,
-                padding: EdgeInsets.all(20),
+                padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(15),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.grey.withOpacity(0.2),
-                      blurRadius: 10,
-                    ),
-                  ],
-                  border: Border.all(
-                    color: _getSeverityColor(
-                        _result!['severity'] ?? 'None'),
-                    width: 2,
-                  ),
-                ),
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12)),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Center(
-                      child: Text('🌿 Detection Result',
-                          style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF2E7D32))),
-                    ),
-                    Divider(),
-                    SizedBox(height: 10),
-                    _resultRow('🦠 Disease',
-                        _result!['disease'] ?? ''),
-                    _resultRow('📊 Confidence',
-                        _result!['confidence'] ?? ''),
-                    _resultRow(
-                        '⚠️ Severity', _result!['severity'] ?? ''),
-                    Divider(),
-                    _resultRow(
-                        '💊 Medicine', _result!['medicine'] ?? ''),
-                    _resultRow('💧 Dosage', _result!['dosage'] ?? ''),
-                    _resultRow(
-                        '📅 Frequency', _result!['frequency'] ?? ''),
-                    Divider(),
-                    Row(
-                      children: [
-                        Icon(Icons.lightbulb, color: Colors.orange),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(_result!['tip'] ?? '',
-                              style: TextStyle(
-                                  color: Colors.grey[700],
-                                  fontSize: 13)),
-                        ),
-                      ],
-                    ),
+                    Text('${_result!['disease']}',
+                        style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: kGreen)),
+                    const Divider(),
+                    _row('Crop', '${_result!['crop']}'),
+                    _row('Confidence', '${_result!['confidence']}%'),
+                    _row('Severity', '${_result!['severity']}'),
+                    _row('Medicine', '${_result!['medicine']}'),
+                    _row('Dosage', '${_result!['dosage']}'),
+                    _row('Frequency', '${_result!['frequency']}'),
+                    _row('Tip', '${_result!['tip']}'),
                   ],
                 ),
               ),
-
-            // ERROR
-            if (_result != null && _result!.containsKey('error'))
-              Container(
-                padding: EdgeInsets.all(15),
-                decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  '❌ Error: ${_result!['error']}\nMake sure backend is running!',
-                  style: TextStyle(color: Colors.red),
-                ),
-              ),
+            ],
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _resultRow(String label, String value) {
-    return Padding(
-      padding: EdgeInsets.symmetric(vertical: 5),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 120,
-            child: Text(label,
-                style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey[700])),
-          ),
-          Expanded(
-            child: Text(value,
-                style: TextStyle(color: Colors.black87)),
-          ),
-        ],
       ),
     );
   }
